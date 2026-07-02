@@ -1,38 +1,104 @@
-import pandas as pd
+﻿from pathlib import Path
 import numpy as np
+import pandas as pd
+
 
 class GPSAuswertung:
     def __init__(self, gps_data) -> None:
         self.gps_data = gps_data
         self.df = None
+        self.lat_col = None
+        self.lon_col = None
+        self.ele_col = None
+        self.time_col = None
+        self.temp_col = None
+
+    def set_data_source(self, gps_data) -> None:
+        self.gps_data = gps_data
+        self.df = None
+        self.lat_col = None
+        self.lon_col = None
+        self.ele_col = None
+        self.time_col = None
+        self.temp_col = None
+
+    def _resolve_path(self, path):
+        if isinstance(path, Path):
+            return path
+
+        path_obj = Path(path)
+        if path_obj.is_absolute():
+            return path_obj
+        return (Path(__file__).resolve().parent / path_obj).resolve()
 
     def csv_read(self):
-        self.df = pd.read_csv(self.gps_data)
+        if isinstance(self.gps_data, pd.DataFrame):
+            self.df = self.gps_data.copy()
+            return self.df
+
+        path = self._resolve_path(self.gps_data)
+        if not path.exists():
+            raise FileNotFoundError(f"Datei nicht gefunden: {path}")
+
+        try:
+            self.df = pd.read_csv(path, sep=";")
+        except Exception:
+            self.df = pd.read_csv(path)
         return self.df
-    
-    def prepare_data(self, lat, lon, ele,  time, temp):
+
+    def prepare_data(self, lat="lat", lon="lon", ele="ele", time="time", temp="temperature"):
         if self.df is None:
-           self.df = self.csv_read()
-        
+            self.df = self.csv_read()
+
+        if self.df is None:
+            raise ValueError("Konnte die GPS-Daten nicht lesen; self.df ist None.")
+
         required = [lat, lon, ele, time, temp]
-        missing = [i for i in required if i not in self.df.columns]
+        missing = [col for col in required if col not in self.df.columns]
         if missing:
             raise ValueError(f"Fehlende Spalten: {missing}")
-        
-        self.df[time] = pd.to_datetime(self.df[time])
-        self.df = self.df.sort_values(time).reset_index(drop=True) #das check ich noch nicht so ganz
 
-        self.df[lat] = pd.to_numeric(self.df[lat])
-        self.df[lon] = pd.to_numeric(self.df[lon])
-        self.df[ele] = pd.to_numeric(self.df[ele])
+        self.lat_col = lat
+        self.lon_col = lon
+        self.ele_col = ele
+        self.time_col = time
+        self.temp_col = temp
+
+        self.df[self.time_col] = pd.to_datetime(self.df[self.time_col], errors="coerce")
+        self.df = self.df.dropna(subset=[self.time_col]).sort_values(self.time_col).reset_index(drop=True)
+
+        self.df[self.lat_col] = pd.to_numeric(self.df[self.lat_col], errors="coerce")
+        self.df[self.lon_col] = pd.to_numeric(self.df[self.lon_col], errors="coerce")
+        self.df[self.ele_col] = pd.to_numeric(self.df[self.ele_col], errors="coerce")
         return self.df
 
-
-           
-
-
     def geschwindigkeit(self):
-        pass
+        if self.df is None or None in (self.lat_col, self.lon_col, self.ele_col, self.time_col):
+            raise ValueError("Daten müssen mit prepare_data() vorbereitet werden, bevor geschwindigkeit() aufgerufen wird.")
+
+        self.df["delta_t"] = self.df[self.time_col].diff().dt.total_seconds().fillna(0)
+
+        lat1 = np.radians(self.df[self.lat_col])
+        lon1 = np.radians(self.df[self.lon_col])
+        lat2 = np.radians(self.df[self.lat_col].shift(-1))
+        lon2 = np.radians(self.df[self.lon_col].shift(-1))
+
+        dlat = lat2 - lat1
+        dlon = lon2 - lon1
+
+        a = np.sin(dlat / 2) ** 2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon / 2) ** 2
+        a = np.clip(a, 0, 1)
+
+        h_distance = 2 * 6371000 * np.arcsin(np.sqrt(a))
+        dele = self.df[self.ele_col].shift(-1) - self.df[self.ele_col]
+
+        self.df["distance"] = np.sqrt(h_distance**2 + dele**2)
+        self.df["distance"] = self.df["distance"].fillna(0)
+
+        self.df["geschw._m/s"] = np.where(self.df["delta_t"] > 0, self.df["distance"] / self.df["delta_t"], 0)
+        self.df["geschw._km/h"] = self.df["geschw._m/s"] * 3.6
+
+        return self.df
 
     def beschleunigung(self):
         pass
@@ -40,4 +106,9 @@ class GPSAuswertung:
     def steigung(self):
         pass
 
-        
+
+if __name__ == "__main__":
+    gps = GPSAuswertung("final_project_input_data.csv")
+    df = gps.prepare_data()
+    df_2 = gps.geschwindigkeit()
+    print(df_2[["geschw._km/h"]].head(10))
