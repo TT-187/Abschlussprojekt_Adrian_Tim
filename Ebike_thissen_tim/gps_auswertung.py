@@ -48,7 +48,7 @@ class GPSAuswertung:
 
     def prepare_data(self, lat="lat", lon="lon", ele="ele", time="time", temp="temperature"):
         if self.df is None:
-            self.df = self.csv_read()
+             self.csv_read()
 
         if self.df is None:
             raise ValueError("Konnte die GPS-Daten nicht lesen; self.df ist None.")
@@ -74,6 +74,9 @@ class GPSAuswertung:
 
     def geschwindigkeit(self):
         if self.df is None or None in (self.lat_col, self.lon_col, self.ele_col, self.time_col):
+            self.prepare_data()
+
+        if self.df is None or None in (self.lat_col, self.lon_col, self.ele_col, self.time_col):
             raise ValueError("Daten müssen mit prepare_data() vorbereitet werden, bevor geschwindigkeit() aufgerufen wird.")
 
         self.df["delta_t"] = self.df[self.time_col].diff().dt.total_seconds().fillna(0)
@@ -87,12 +90,12 @@ class GPSAuswertung:
         dlon = lon2 - lon1
 
         a = np.sin(dlat / 2) ** 2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon / 2) ** 2
-        a = np.clip(a, 0, 1)
+        a = np.clip(a, 0, 1) 
 
-        h_distance = 2 * 6371000 * np.arcsin(np.sqrt(a))
-        dele = self.df[self.ele_col].shift(-1) - self.df[self.ele_col]
+        self.df["h_distance"] = 2 * 6371000 * np.arcsin(np.sqrt(a))
+        self.df["d_ele"] = self.df[self.ele_col].shift(-1) - self.df[self.ele_col]
 
-        self.df["distance"] = np.sqrt(h_distance**2 + dele**2)
+        self.df["distance"] = np.sqrt(self.df["h_distance"]**2 + self.df["d_ele"]**2)
         self.df["distance"] = self.df["distance"].fillna(0)
 
         self.df["geschw._m/s"] = np.where(self.df["delta_t"] > 0, self.df["distance"] / self.df["delta_t"], 0)
@@ -101,14 +104,31 @@ class GPSAuswertung:
         return self.df
 
     def beschleunigung(self):
-        pass
+        if self.df is None or "geschw._m/s" not in self.df.columns:
+            self.geschwindigkeit()
+
+        if self.df is None or "geschw._m/s" not in self.df.columns:
+            raise ValueError("Daten müssen mit geschwindigkeit() vorbereitet werden, bevor beschleunigung() aufgerufen wird.")
+
+        self.df["delta_v"] = self.df["geschw._m/s"].diff().fillna(0)
+        self.df["beschleunigung"] = np.where(self.df["delta_t"] > 0, self.df["delta_v"] / self.df["delta_t"], 0)
+
+        return self.df
 
     def steigung(self):
-        pass
+        if self.df is None or "d_ele" not in self.df.columns or "h_distance" not in self.df.columns:
+            self.geschwindigkeit()
+        
+        if self.df is None or "d_ele" not in self.df.columns or "h_distance" not in self.df.columns:
+            raise ValueError("Daten konnten nicht ausgelesen oder vorberitet werden.")
+            
+        self.df["steigung"]= np.arctan(self.df["d_ele"]/ + self.df["h_distance"])
+        return self.df
 
 
 if __name__ == "__main__":
     gps = GPSAuswertung("final_project_input_data.csv")
-    df = gps.prepare_data()
-    df_2 = gps.geschwindigkeit()
-    print(df_2[["geschw._km/h"]].head(10))
+    df = gps.geschwindigkeit()
+    #df = gps.beschleunigung()
+    #df = gps.steigung()
+    print(df[["geschw._m/s"]].head(10))
